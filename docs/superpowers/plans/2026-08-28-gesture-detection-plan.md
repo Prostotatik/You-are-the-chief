@@ -738,16 +738,20 @@ namespace GestureDetection.Tests
             new Dictionary<PoseJoint, Vector2> { { PoseJoint.RightElbow, elbow }, { PoseJoint.RightWrist, wrist } };
 
         [Test]
-        public void Evaluate_WristTracesFullCircleAroundElbow_Matches()
+        public void Evaluate_WristTracesFullCircleRaisedAboveElbow_Matches()
         {
             var elbow = new Vector2(0.5f, 0.5f);
+            // Circle's center sits above the elbow (smaller y) but still encloses it,
+            // so the loop winds a full 360 degrees around the elbow while keeping the
+            // wrist's average height above the elbow's.
+            var center = elbow + new Vector2(0f, -0.05f);
             const float radius = 0.2f;
             var builder = new LandmarkSequenceBuilder();
             // 8 steps of 45 degrees = one full monotonic 360-degree loop around the elbow.
             for (int i = 0; i <= 8; i++)
             {
                 float angle = i * 45f * Mathf.Deg2Rad;
-                var wrist = elbow + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                var wrist = center + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
                 builder.AddFrame(0.1f, RightArm(elbow, wrist));
             }
 
@@ -756,6 +760,28 @@ namespace GestureDetection.Tests
 
             Assert.IsTrue(result.IsMatch);
             Assert.AreEqual(1f, result.Progress, 0.01f);
+        }
+
+        [Test]
+        public void Evaluate_WristTracesFullCircleBelowElbow_DoesNotMatch()
+        {
+            var elbow = new Vector2(0.5f, 0.5f);
+            // Same full 360-degree loop, but centered below the elbow (larger y) —
+            // the rotation requirement is satisfied but the height requirement isn't.
+            var center = elbow + new Vector2(0f, 0.05f);
+            const float radius = 0.2f;
+            var builder = new LandmarkSequenceBuilder();
+            for (int i = 0; i <= 8; i++)
+            {
+                float angle = i * 45f * Mathf.Deg2Rad;
+                var wrist = center + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                builder.AddFrame(0.1f, RightArm(elbow, wrist));
+            }
+
+            var matcher = new PizzaMatcher();
+            var result = matcher.Evaluate(builder.Build(), CalibrationData.Identity);
+
+            Assert.IsFalse(result.IsMatch);
         }
 
         [Test]
@@ -792,12 +818,13 @@ using UnityEngine;
 namespace GestureDetection
 {
     // Pizza: rotate a hand as if twirling dough. Detected as a wrist tracing a
-    // circular path around its elbow.
+    // circular path around its elbow while raised above it on average.
     //
-    // No per-frame height gate: a full loop around the elbow necessarily has the
-    // wrist below elbow height for part of the loop, so gating frames by
-    // "wrist above elbow" would drop exactly the frames needed to keep the angle
-    // sweep continuous and make RequiredRotationDegrees unreachable.
+    // The "raised above the elbow" check is a window-average, not a per-frame
+    // gate: a full loop around the elbow necessarily has the wrist below elbow
+    // height for part of the loop, so gating individual frames by "wrist above
+    // elbow" would drop exactly the frames needed to keep the angle sweep
+    // continuous and make RequiredRotationDegrees unreachable.
     public class PizzaMatcher : IGestureMatcher
     {
         public const float RequiredRotationDegrees = 300f;
@@ -817,6 +844,10 @@ namespace GestureDetection
         private static float EvaluateArm(IReadOnlyList<LandmarkFrame> window, PoseJoint elbowJoint, PoseJoint wristJoint)
         {
             var relative = new List<Vector2>();
+            float wristYSum = 0f;
+            float elbowYSum = 0f;
+            int sampleCount = 0;
+
             foreach (var frame in window)
             {
                 bool hasElbow = JointFilter.TryGet(frame, elbowJoint, out var elbow);
@@ -824,7 +855,16 @@ namespace GestureDetection
                 if (!hasElbow || !hasWrist) continue;
 
                 relative.Add(wrist - elbow);
+                wristYSum += wrist.y;
+                elbowYSum += elbow.y;
+                sampleCount++;
             }
+
+            if (sampleCount == 0) return 0f;
+
+            float averageWristY = wristYSum / sampleCount;
+            float averageElbowY = elbowYSum / sampleCount;
+            if (averageWristY >= averageElbowY) return 0f; // wrist must be raised above the elbow on average
 
             return GestureMath.AccumulatedRotation(relative);
         }
@@ -835,7 +875,7 @@ namespace GestureDetection
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run the EditMode tests for `GestureDetection.Tests.PizzaMatcherTests` via the `unity-cli` skill.
-Expected: 2 tests PASS.
+Expected: 3 tests PASS.
 
 - [ ] **Step 5: Commit**
 
