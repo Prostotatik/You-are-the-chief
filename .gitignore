@@ -1,0 +1,40 @@
+# Unity generated
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+
+# Asset meta backups
+*.tmp
+
+# Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.idea/
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Crashlytics
+crashlytics-build.properties
+
+# Packages (lock file kept, cache not)
+/[Pp]ackages/packages-lock.json.meta
