@@ -738,18 +738,18 @@ namespace GestureDetection.Tests
             new Dictionary<PoseJoint, Vector2> { { PoseJoint.RightElbow, elbow }, { PoseJoint.RightWrist, wrist } };
 
         [Test]
-        public void Evaluate_WristCirclesAboveElbow_Matches()
+        public void Evaluate_WristTracesFullCircleAroundElbow_Matches()
         {
             var elbow = new Vector2(0.5f, 0.5f);
+            const float radius = 0.2f;
             var builder = new LandmarkSequenceBuilder();
-            // Wrist above elbow (smaller y), tracing a full circle around it.
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(0.1f, -0.2f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(-0.1f, -0.2f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(-0.2f, -0.1f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(-0.1f, -0.2f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(0.1f, -0.2f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(0.2f, -0.1f)));
-            builder.AddFrame(0.1f, RightArm(elbow, elbow + new Vector2(0.1f, -0.2f)));
+            // 8 steps of 45 degrees = one full monotonic 360-degree loop around the elbow.
+            for (int i = 0; i <= 8; i++)
+            {
+                float angle = i * 45f * Mathf.Deg2Rad;
+                var wrist = elbow + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                builder.AddFrame(0.1f, RightArm(elbow, wrist));
+            }
 
             var matcher = new PizzaMatcher();
             var result = matcher.Evaluate(builder.Build(), CalibrationData.Identity);
@@ -792,7 +792,12 @@ using UnityEngine;
 namespace GestureDetection
 {
     // Pizza: rotate a hand as if twirling dough. Detected as a wrist tracing a
-    // circular path around its elbow while raised above it.
+    // circular path around its elbow.
+    //
+    // No per-frame height gate: a full loop around the elbow necessarily has the
+    // wrist below elbow height for part of the loop, so gating frames by
+    // "wrist above elbow" would drop exactly the frames needed to keep the angle
+    // sweep continuous and make RequiredRotationDegrees unreachable.
     public class PizzaMatcher : IGestureMatcher
     {
         public const float RequiredRotationDegrees = 300f;
@@ -817,7 +822,6 @@ namespace GestureDetection
                 bool hasElbow = JointFilter.TryGet(frame, elbowJoint, out var elbow);
                 bool hasWrist = JointFilter.TryGet(frame, wristJoint, out var wrist);
                 if (!hasElbow || !hasWrist) continue;
-                if (wrist.y >= elbow.y) continue; // wrist must be raised above the elbow
 
                 relative.Add(wrist - elbow);
             }
