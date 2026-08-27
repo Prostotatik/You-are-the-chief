@@ -4,7 +4,12 @@ using UnityEngine;
 namespace GestureDetection
 {
     // Pizza: rotate a hand as if twirling dough. Detected as a wrist tracing a
-    // circular path around its elbow while raised above it.
+    // circular path around its elbow.
+    //
+    // No per-frame height gate: a full loop around the elbow necessarily has the
+    // wrist below elbow height for part of the loop, so gating frames by
+    // "wrist above elbow" would drop exactly the frames needed to keep the angle
+    // sweep continuous and make RequiredRotationDegrees unreachable.
     public class PizzaMatcher : IGestureMatcher
     {
         public const float RequiredRotationDegrees = 300f;
@@ -29,7 +34,6 @@ namespace GestureDetection
                 bool hasElbow = JointFilter.TryGet(frame, elbowJoint, out var elbow);
                 bool hasWrist = JointFilter.TryGet(frame, wristJoint, out var wrist);
                 if (!hasElbow || !hasWrist) continue;
-                if (wrist.y >= elbow.y) continue; // wrist must be raised above the elbow
 
                 relative.Add(wrist - elbow);
             }
