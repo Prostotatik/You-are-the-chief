@@ -11,16 +11,20 @@ namespace GestureDetection.Tests
             new Dictionary<PoseJoint, Vector2> { { PoseJoint.RightElbow, elbow }, { PoseJoint.RightWrist, wrist } };
 
         [Test]
-        public void Evaluate_WristTracesFullCircleAroundElbow_Matches()
+        public void Evaluate_WristTracesFullCircleRaisedAboveElbow_Matches()
         {
             var elbow = new Vector2(0.5f, 0.5f);
+            // Circle's center sits above the elbow (smaller y) but still encloses it,
+            // so the loop winds a full 360 degrees around the elbow while keeping the
+            // wrist's average height above the elbow's.
+            var center = elbow + new Vector2(0f, -0.05f);
             const float radius = 0.2f;
             var builder = new LandmarkSequenceBuilder();
             // 8 steps of 45 degrees = one full monotonic 360-degree loop around the elbow.
             for (int i = 0; i <= 8; i++)
             {
                 float angle = i * 45f * Mathf.Deg2Rad;
-                var wrist = elbow + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                var wrist = center + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
                 builder.AddFrame(0.1f, RightArm(elbow, wrist));
             }
 
@@ -29,6 +33,28 @@ namespace GestureDetection.Tests
 
             Assert.IsTrue(result.IsMatch);
             Assert.AreEqual(1f, result.Progress, 0.01f);
+        }
+
+        [Test]
+        public void Evaluate_WristTracesFullCircleBelowElbow_DoesNotMatch()
+        {
+            var elbow = new Vector2(0.5f, 0.5f);
+            // Same full 360-degree loop, but centered below the elbow (larger y) —
+            // the rotation requirement is satisfied but the height requirement isn't.
+            var center = elbow + new Vector2(0f, 0.05f);
+            const float radius = 0.2f;
+            var builder = new LandmarkSequenceBuilder();
+            for (int i = 0; i <= 8; i++)
+            {
+                float angle = i * 45f * Mathf.Deg2Rad;
+                var wrist = center + radius * new Vector2(Mathf.Cos(angle), Mathf.Sin(angle));
+                builder.AddFrame(0.1f, RightArm(elbow, wrist));
+            }
+
+            var matcher = new PizzaMatcher();
+            var result = matcher.Evaluate(builder.Build(), CalibrationData.Identity);
+
+            Assert.IsFalse(result.IsMatch);
         }
 
         [Test]

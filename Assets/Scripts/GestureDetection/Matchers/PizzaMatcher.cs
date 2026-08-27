@@ -4,12 +4,13 @@ using UnityEngine;
 namespace GestureDetection
 {
     // Pizza: rotate a hand as if twirling dough. Detected as a wrist tracing a
-    // circular path around its elbow.
+    // circular path around its elbow while raised above it on average.
     //
-    // No per-frame height gate: a full loop around the elbow necessarily has the
-    // wrist below elbow height for part of the loop, so gating frames by
-    // "wrist above elbow" would drop exactly the frames needed to keep the angle
-    // sweep continuous and make RequiredRotationDegrees unreachable.
+    // The "raised above the elbow" check is a window-average, not a per-frame
+    // gate: a full loop around the elbow necessarily has the wrist below elbow
+    // height for part of the loop, so gating individual frames by "wrist above
+    // elbow" would drop exactly the frames needed to keep the angle sweep
+    // continuous and make RequiredRotationDegrees unreachable.
     public class PizzaMatcher : IGestureMatcher
     {
         public const float RequiredRotationDegrees = 300f;
@@ -29,6 +30,10 @@ namespace GestureDetection
         private static float EvaluateArm(IReadOnlyList<LandmarkFrame> window, PoseJoint elbowJoint, PoseJoint wristJoint)
         {
             var relative = new List<Vector2>();
+            float wristYSum = 0f;
+            float elbowYSum = 0f;
+            int sampleCount = 0;
+
             foreach (var frame in window)
             {
                 bool hasElbow = JointFilter.TryGet(frame, elbowJoint, out var elbow);
@@ -36,7 +41,16 @@ namespace GestureDetection
                 if (!hasElbow || !hasWrist) continue;
 
                 relative.Add(wrist - elbow);
+                wristYSum += wrist.y;
+                elbowYSum += elbow.y;
+                sampleCount++;
             }
+
+            if (sampleCount == 0) return 0f;
+
+            float averageWristY = wristYSum / sampleCount;
+            float averageElbowY = elbowYSum / sampleCount;
+            if (averageWristY >= averageElbowY) return 0f; // wrist must be raised above the elbow on average
 
             return GestureMath.AccumulatedRotation(relative);
         }
