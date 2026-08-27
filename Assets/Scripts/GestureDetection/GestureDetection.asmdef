@@ -1,7 +1,9 @@
 {
     "name": "GestureDetection",
     "rootNamespace": "GestureDetection",
-    "references": [],
+    "references": [
+        "Unity.InferenceEngine"
+    ],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
