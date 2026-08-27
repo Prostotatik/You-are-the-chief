@@ -16,11 +16,15 @@ namespace GestureDetection
 
             foreach (var frame in frames)
             {
-                bool hasShoulders = JointFilter.TryGet(frame, PoseJoint.LeftShoulder, out var leftShoulder)
-                    && JointFilter.TryGet(frame, PoseJoint.RightShoulder, out var rightShoulder);
-                bool hasHips = JointFilter.TryGet(frame, PoseJoint.LeftHip, out var leftHip)
-                    && JointFilter.TryGet(frame, PoseJoint.RightHip, out var rightHip);
-                if (!hasShoulders || !hasHips) continue;
+                // Each TryGet is called unconditionally (not short-circuited via &&) so the
+                // compiler can prove leftShoulder/rightShoulder/leftHip/rightHip are always
+                // definitely assigned below - JointFilter.TryGet assigns its out parameter
+                // on both the true and false paths.
+                bool hasLeftShoulder = JointFilter.TryGet(frame, PoseJoint.LeftShoulder, out var leftShoulder);
+                bool hasRightShoulder = JointFilter.TryGet(frame, PoseJoint.RightShoulder, out var rightShoulder);
+                bool hasLeftHip = JointFilter.TryGet(frame, PoseJoint.LeftHip, out var leftHip);
+                bool hasRightHip = JointFilter.TryGet(frame, PoseJoint.RightHip, out var rightHip);
+                if (!hasLeftShoulder || !hasRightShoulder || !hasLeftHip || !hasRightHip) continue;
 
                 scaleSum += Vector2.Distance(leftShoulder, rightShoulder);
                 centerSum += (leftHip + rightHip) * 0.5f;
