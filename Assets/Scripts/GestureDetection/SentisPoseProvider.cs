@@ -63,6 +63,10 @@ namespace GestureDetection
 
         public bool IsCameraUnavailable { get; private set; }
 
+        // Exposed for debug/preview UI only (e.g. GestureDetectionDebugOverlay) - not
+        // part of the IPoseProvider gameplay contract.
+        public WebCamTexture Texture => _webcamTexture;
+
         private WebCamTexture _webcamTexture;
         private Worker _worker;
         private Tensor<float> _inputTensor;
@@ -118,8 +122,9 @@ namespace GestureDetection
             _hasReceivedFirstFrame = true;
             _timeSinceLastFrame = 0f;
 
+            // Dimensions are inferred from _inputTensor's own shape (already 256x256x3) -
+            // SetDimensions is obsolete in this package version for that reason.
             var transform = new TextureTransform()
-                .SetDimensions(InputSize, InputSize, 3)
                 .SetTensorLayout(TensorLayout.NHWC);
             TextureConverter.ToTensor(_webcamTexture, _inputTensor, transform);
             _worker.Schedule(_inputTensor);

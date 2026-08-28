@@ -132,6 +132,7 @@ GameObject:
   - component: {fileID: 569946951}
   - component: {fileID: 569946950}
   - component: {fileID: 569946949}
+  - component: {fileID: 569946954}
   m_Layer: 0
   m_Name: PipelineRoot
   m_TagString: Untagged
@@ -209,6 +210,23 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &569946954
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 569946948}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 121579800b83466459a0c96162d8f380, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: GestureDetection::GestureDetection.GestureDetectionDebugOverlay
+  poseProvider: {fileID: 569946952}
+  gestureDetector: {fileID: 569946951}
+  minConfidenceToDraw: 0.4
+  previewWidth: 480
+  previewHeight: 360
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
