@@ -67,6 +67,7 @@ namespace GestureDetection
         private Worker _worker;
         private Tensor<float> _inputTensor;
         private float _timeSinceLastFrame;
+        private bool _hasReceivedFirstFrame;
 
         private void Start()
         {
@@ -99,14 +100,22 @@ namespace GestureDetection
 
             if (!_webcamTexture.didUpdateThisFrame)
             {
-                _timeSinceLastFrame += Time.deltaTime;
-                if (_timeSinceLastFrame >= DisconnectTimeoutSeconds && !IsCameraUnavailable)
+                // Only the disconnect watchdog (not camera warm-up) should ever disable
+                // the provider here: a webcam can legitimately take longer than
+                // DisconnectTimeoutSeconds to deliver its first frame (OS permission
+                // prompts, slow driver init), and that must not be treated as a failure.
+                if (_hasReceivedFirstFrame)
                 {
-                    RaiseCameraUnavailable();
+                    _timeSinceLastFrame += Time.deltaTime;
+                    if (_timeSinceLastFrame >= DisconnectTimeoutSeconds && !IsCameraUnavailable)
+                    {
+                        RaiseCameraUnavailable();
+                    }
                 }
                 return;
             }
 
+            _hasReceivedFirstFrame = true;
             _timeSinceLastFrame = 0f;
 
             var transform = new TextureTransform()
@@ -149,6 +158,7 @@ namespace GestureDetection
         private void RaiseCameraUnavailable()
         {
             IsCameraUnavailable = true;
+            _webcamTexture?.Stop();
             OnCameraUnavailable?.Invoke();
             enabled = false;
         }

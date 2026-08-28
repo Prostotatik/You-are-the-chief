@@ -76,6 +76,40 @@ namespace GestureDetection.Tests
         }
 
         [Test]
+        public void HandleLandmarkFrame_ProgressFallingBelowFloor_RetractsToZeroInsteadOfStaying()
+        {
+            var go = new GameObject("GestureDetector");
+            var detector = go.AddComponent<GestureDetector>();
+            var poseProvider = new FakePoseProvider();
+            detector.Initialize(poseProvider);
+
+            var events = new List<(GestureType gesture, float progress)>();
+            detector.OnGestureProgress += (g, p) => events.Add((g, p));
+
+            // Left ankle alone produces one strike (not enough feet to match Wine, but
+            // enough for its progress to clear the report floor).
+            poseProvider.PushFrame(WineStompFrame(0f, 0.7f, 0.8f));
+            poseProvider.PushFrame(WineStompFrame(0.15f, 0.9f, 0.8f));
+            poseProvider.PushFrame(WineStompFrame(0.3f, 0.7f, 0.8f));
+
+            Assert.AreEqual(1, events.Count);
+            Assert.AreEqual(GestureType.Wine, events[0].gesture);
+            Assert.Greater(events[0].progress, 0f);
+
+            // Push enough later, static frames that the 1.5s evaluation window slides
+            // past the oscillating frames above entirely - progress should retract to 0
+            // rather than staying frozen at its last reported value.
+            poseProvider.PushFrame(WineStompFrame(5f, 0.7f, 0.8f));
+            poseProvider.PushFrame(WineStompFrame(5.15f, 0.7f, 0.8f));
+
+            Assert.AreEqual(2, events.Count);
+            Assert.AreEqual(GestureType.Wine, events[1].gesture);
+            Assert.AreEqual(0f, events[1].progress);
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
         public void HandleLandmarkFrame_AfterMatch_LocksAndIgnoresFurtherFrames()
         {
             var go = new GameObject("GestureDetector");

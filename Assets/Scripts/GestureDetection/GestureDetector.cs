@@ -30,6 +30,7 @@ namespace GestureDetection
 
         private CalibrationData _calibration = CalibrationData.Identity;
         private GestureType? _lockedGesture;
+        private GestureType? _lastReportedProgressGesture;
 
         public void Initialize(IPoseProvider poseProvider)
         {
@@ -58,6 +59,7 @@ namespace GestureDetection
         public void ResetLock()
         {
             _lockedGesture = null;
+            _lastReportedProgressGesture = null;
             // Without this, frames already in the buffer from the just-recognized gesture
             // are still inside the next evaluation window and immediately re-match,
             // firing OnGestureRecognized again on the very next incoming frame.
@@ -87,6 +89,7 @@ namespace GestureDetection
                 if (result.IsMatch)
                 {
                     _lockedGesture = matcher.GestureType;
+                    _lastReportedProgressGesture = null;
                     OnGestureProgress?.Invoke(matcher.GestureType, 1f);
                     OnGestureRecognized?.Invoke(matcher.GestureType);
                     return;
@@ -101,7 +104,24 @@ namespace GestureDetection
 
             if (bestProgress >= ProgressReportFloor)
             {
+                // If the leading gesture changed since the last report, retract the
+                // previous one to 0 first - otherwise a consumer showing one progress bar
+                // per gesture would leave the old one visibly stuck at its last value.
+                if (_lastReportedProgressGesture.HasValue && _lastReportedProgressGesture.Value != bestGesture)
+                {
+                    OnGestureProgress?.Invoke(_lastReportedProgressGesture.Value, 0f);
+                }
+
                 OnGestureProgress?.Invoke(bestGesture, bestProgress);
+                _lastReportedProgressGesture = bestGesture;
+            }
+            else if (_lastReportedProgressGesture.HasValue)
+            {
+                // The previously-leading gesture fell below the floor (player stopped or
+                // eased off) - retract it to 0 instead of leaving a UI frozen on a stale
+                // fractional value forever.
+                OnGestureProgress?.Invoke(_lastReportedProgressGesture.Value, 0f);
+                _lastReportedProgressGesture = null;
             }
         }
 
