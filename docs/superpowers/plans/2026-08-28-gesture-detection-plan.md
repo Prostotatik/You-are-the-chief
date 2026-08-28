@@ -2016,7 +2016,10 @@ namespace GestureDetection
 
             TextureConverter.ToTensor(_webcamTexture, _inputTensor, new TextureTransform().SetDimensions(InputSize, InputSize, 3));
             _worker.Schedule(_inputTensor);
-            using var output = _worker.PeekOutput() as Tensor<float>;
+            // Do NOT Dispose() this tensor: PeekOutput returns a reference into the worker's
+            // own pooled storage, not a copy - disposing it here frees memory the worker still
+            // considers in-use and corrupts state on the next Schedule() call.
+            var output = _worker.PeekOutput() as Tensor<float>;
             if (output == null) return;
 
             var downloaded = output.DownloadToArray();
@@ -2026,6 +2029,11 @@ namespace GestureDetection
                 int baseIndex = i * OutputStride;
                 float x = downloaded[baseIndex];
                 float y = downloaded[baseIndex + 1];
+                // UNVERIFIED: assumes this graph's visibility output is already a [0,1]
+                // probability. MediaPipe-family models sometimes output a raw pre-sigmoid
+                // logit here instead, which Clamp01 would silently binarize. Confirm against
+                // real webcam output (values outside [0,1] before clamping would prove it's a
+                // logit) once a camera is available, and apply Sigmoid here if so.
                 float visibility = downloaded[baseIndex + VisibilityOffset];
                 joints[i] = new PoseLandmark(new Vector2(x, y), Mathf.Clamp01(visibility));
             }
