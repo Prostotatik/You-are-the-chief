@@ -464,11 +464,19 @@ using UnityEngine;
 
 namespace GestureDetection
 {
-    // BodyScale is the player's shoulder width (normalized viewport units) measured
-    // during calibration. Matchers scale their distance thresholds by this value so
-    // detection isn't biased by the player's height or distance from the camera.
+    // BodyScale is a dimensionless ratio: the player's measured shoulder width divided
+    // by ReferenceBodyScale. Matchers multiply their base thresholds (all tuned assuming
+    // a "typical" player, i.e. BodyScale == 1) by this ratio, so a player who is closer
+    // to/further from the camera - or simply bigger/smaller on screen - gets
+    // proportionally scaled thresholds instead of the untuned raw shoulder-width value.
     public readonly struct CalibrationData
     {
+        // Typical shoulder width in normalized viewport units at a comfortable webcam
+        // distance. Raw measured shoulder widths are divided by this to produce
+        // BodyScale, so BodyScale == 1 means "matches the assumption every matcher's
+        // base threshold was tuned against."
+        public const float ReferenceBodyScale = 0.2f;
+
         public readonly float BodyScale;
         public readonly Vector2 ReferenceCenter;
 
@@ -1487,6 +1495,13 @@ namespace GestureDetection
         event Action<GestureType> OnGestureRecognized;
         event Action<GestureType, float> OnGestureProgress;
         event Action OnCameraUnavailable;
+
+        // Re-arms the detector after a match so it can recognize the next gesture.
+        // Without calling this, a detector locks onto its first recognized gesture for
+        // the rest of the session - callers must call this once they're done reacting
+        // to an OnGestureRecognized event (e.g. after assigning it to an order) so the
+        // player can perform another gesture afterward.
+        void ResetLock();
     }
 }
 ```
@@ -1655,6 +1670,10 @@ namespace GestureDetection
         public void ResetLock()
         {
             _lockedGesture = null;
+            // Without this, frames already in the buffer from the just-recognized gesture
+            // are still inside the next evaluation window and immediately re-match,
+            // firing OnGestureRecognized again on the very next incoming frame.
+            _buffer.Clear();
         }
 
         private void HandleLandmarkFrame(LandmarkFrame frame)
@@ -1847,7 +1866,9 @@ namespace GestureDetection
 
             if (sampleCount == 0) return CalibrationData.Identity;
 
-            return new CalibrationData(scaleSum / sampleCount, centerSum / sampleCount);
+            float averageShoulderWidth = scaleSum / sampleCount;
+            float bodyScale = averageShoulderWidth / CalibrationData.ReferenceBodyScale;
+            return new CalibrationData(bodyScale, centerSum / sampleCount);
         }
     }
 }
