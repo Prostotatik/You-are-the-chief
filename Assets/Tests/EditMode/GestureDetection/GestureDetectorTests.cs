@@ -14,6 +14,8 @@ namespace GestureDetection.Tests
                 joints[i] = new PoseLandmark(Vector2.zero, 0f);
             joints[(int)PoseJoint.LeftAnkle] = new PoseLandmark(new Vector2(0.4f, leftY), 1f);
             joints[(int)PoseJoint.RightAnkle] = new PoseLandmark(new Vector2(0.6f, rightY), 1f);
+            joints[(int)PoseJoint.LeftHip] = new PoseLandmark(new Vector2(0.4f, 0.5f), 1f);
+            joints[(int)PoseJoint.RightHip] = new PoseLandmark(new Vector2(0.6f, 0.5f), 1f);
             return new LandmarkFrame(timestamp, joints);
         }
 
@@ -34,6 +36,41 @@ namespace GestureDetection.Tests
                 poseProvider.PushFrame(WineStompFrame(i * 0.15f, leftYs[i], rightYs[i]));
 
             Assert.AreEqual(GestureType.Wine, recognized);
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void HandleLandmarkFrame_EmitsAtMostOneProgressEventPerFrame_AndFinalOneOnMatch()
+        {
+            var go = new GameObject("GestureDetector");
+            var detector = go.AddComponent<GestureDetector>();
+            var poseProvider = new FakePoseProvider();
+            detector.Initialize(poseProvider);
+
+            var allProgressEvents = new List<(GestureType gesture, float progress)>();
+            detector.OnGestureProgress += (g, p) => allProgressEvents.Add((g, p));
+
+            float[] leftYs = { 0.7f, 0.9f, 0.7f, 0.9f };
+            float[] rightYs = { 0.9f, 0.7f, 0.9f, 0.7f };
+            for (int i = 0; i < leftYs.Length; i++)
+            {
+                int countBefore = allProgressEvents.Count;
+                poseProvider.PushFrame(WineStompFrame(i * 0.15f, leftYs[i], rightYs[i]));
+
+                // Never more than one matcher's progress reported for a single frame -
+                // not one event per matcher (5 matchers exist).
+                Assert.LessOrEqual(allProgressEvents.Count - countBefore, 1);
+            }
+
+            // Somewhere in the sequence, the frame that produced the match must have
+            // reported progress 1f for the matched gesture, not some fractional value
+            // from mid-evaluation - it doesn't have to be the very last frame pushed,
+            // since WineMatcher can satisfy its threshold before the sequence ends.
+            Assert.IsTrue(allProgressEvents.Count > 0);
+            var lastEvent = allProgressEvents[allProgressEvents.Count - 1];
+            Assert.AreEqual(GestureType.Wine, lastEvent.gesture);
+            Assert.AreEqual(1f, lastEvent.progress);
 
             Object.DestroyImmediate(go);
         }
@@ -104,6 +141,27 @@ namespace GestureDetection.Tests
             detector.OnCameraUnavailable += () => fired = true;
 
             poseProvider.PushCameraUnavailable();
+
+            Assert.IsTrue(fired);
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void OnCameraUnavailable_AlreadyUnavailableBeforeInitialize_FiresOnCatchUp()
+        {
+            // Simulates the provider's Start() firing OnCameraUnavailable before
+            // whoever composes the scene gets a chance to call Initialize() and
+            // subscribe - Unity's Start() order between components isn't guaranteed.
+            var poseProvider = new FakePoseProvider();
+            poseProvider.PushCameraUnavailable();
+
+            var go = new GameObject("GestureDetector");
+            var detector = go.AddComponent<GestureDetector>();
+
+            bool fired = false;
+            detector.OnCameraUnavailable += () => fired = true;
+            detector.Initialize(poseProvider);
 
             Assert.IsTrue(fired);
 

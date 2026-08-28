@@ -7,7 +7,14 @@ namespace GestureDetection.Tests
         public event Action<LandmarkFrame> OnLandmarkFrame;
         public event Action OnCameraUnavailable;
 
+        public bool IsCameraUnavailable { get; private set; }
+
         public void PushFrame(LandmarkFrame frame) => OnLandmarkFrame?.Invoke(frame);
-        public void PushCameraUnavailable() => OnCameraUnavailable?.Invoke();
+
+        public void PushCameraUnavailable()
+        {
+            IsCameraUnavailable = true;
+            OnCameraUnavailable?.Invoke();
+        }
     }
 }

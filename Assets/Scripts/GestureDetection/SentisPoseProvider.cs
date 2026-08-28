@@ -49,6 +49,11 @@ namespace GestureDetection
         [SerializeField] private int webcamRequestWidth = 640;
         [SerializeField] private int webcamRequestHeight = 480;
 
+        // How long to go without a fresh webcam frame before treating the camera as
+        // disconnected mid-session (as opposed to no device at all, which is caught in
+        // Start()).
+        private const float DisconnectTimeoutSeconds = 3f;
+
         private const int InputSize = 256;
         private const int OutputStride = 5;
         private const int VisibilityOffset = 3;
@@ -56,15 +61,24 @@ namespace GestureDetection
         public event Action<LandmarkFrame> OnLandmarkFrame;
         public event Action OnCameraUnavailable;
 
+        public bool IsCameraUnavailable { get; private set; }
+
         private WebCamTexture _webcamTexture;
         private Worker _worker;
         private Tensor<float> _inputTensor;
+        private float _timeSinceLastFrame;
 
         private void Start()
         {
             if (WebCamTexture.devices.Length == 0)
             {
-                OnCameraUnavailable?.Invoke();
+                RaiseCameraUnavailable();
+                return;
+            }
+
+            if (modelAsset == null)
+            {
+                Debug.LogError($"{nameof(SentisPoseProvider)}: no ModelAsset assigned - disabling.", this);
                 enabled = false;
                 return;
             }
@@ -81,7 +95,19 @@ namespace GestureDetection
 
         private void Update()
         {
-            if (_webcamTexture == null || !_webcamTexture.didUpdateThisFrame) return;
+            if (_webcamTexture == null) return;
+
+            if (!_webcamTexture.didUpdateThisFrame)
+            {
+                _timeSinceLastFrame += Time.deltaTime;
+                if (_timeSinceLastFrame >= DisconnectTimeoutSeconds && !IsCameraUnavailable)
+                {
+                    RaiseCameraUnavailable();
+                }
+                return;
+            }
+
+            _timeSinceLastFrame = 0f;
 
             var transform = new TextureTransform()
                 .SetDimensions(InputSize, InputSize, 3)
@@ -118,6 +144,13 @@ namespace GestureDetection
             _webcamTexture?.Stop();
             _worker?.Dispose();
             _inputTensor?.Dispose();
+        }
+
+        private void RaiseCameraUnavailable()
+        {
+            IsCameraUnavailable = true;
+            OnCameraUnavailable?.Invoke();
+            enabled = false;
         }
     }
 }

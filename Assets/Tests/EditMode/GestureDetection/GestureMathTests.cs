@@ -32,6 +32,16 @@ namespace GestureDetection.Tests
         }
 
         [Test]
+        public void CountReversals_SmallDipDuringLargeMonotonicRise_IsNotCountedAsAReversal()
+        {
+            // A single noisy sample (0.19 instead of continuing to rise) during an
+            // otherwise steady climb from 0.0 to 0.3 must not be treated as a turn.
+            var values = new List<float> { 0.0f, 0.1f, 0.2f, 0.19f, 0.3f };
+            int reversals = GestureMath.CountReversals(values, minAmplitude: 0.05f);
+            Assert.AreEqual(0, reversals);
+        }
+
+        [Test]
         public void AccumulatedRotation_FullCircle_ReturnsAbout360()
         {
             var points = new List<Vector2>

@@ -34,15 +34,16 @@ namespace GestureDetection
                 if (!hasAnkle || !hasKnee || !hasWrist) continue;
                 if (ankle.y >= knee.y) continue; // leg must be raised: ankle above the knee
 
-                distances.Add(Vector2.Distance(ankle, wrist));
+                // Skip (not reject the whole window for) a single frame where the wrist
+                // strayed too far from the ankle - one noisy/out-of-range sample shouldn't
+                // erase an otherwise clean rubbing motion.
+                float distance = Vector2.Distance(ankle, wrist);
+                if (distance > proximityThreshold) continue;
+
+                distances.Add(distance);
             }
 
             if (distances.Count == 0) return 0f;
-
-            foreach (var distance in distances)
-            {
-                if (distance > proximityThreshold) return 0f;
-            }
 
             int reversals = GestureMath.CountReversals(distances, proximityThreshold * 0.2f);
             return Mathf.Clamp01((float)reversals / RequiredOscillations);

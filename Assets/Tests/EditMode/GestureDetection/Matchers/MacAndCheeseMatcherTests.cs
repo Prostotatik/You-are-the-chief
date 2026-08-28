@@ -35,6 +35,34 @@ namespace GestureDetection.Tests
         }
 
         [Test]
+        public void Evaluate_OneNoisyOutOfRangeFrame_DoesNotEraseAnOtherwiseCleanMatch()
+        {
+            var knee = new Vector2(0.5f, 0.6f);
+            var ankle = new Vector2(0.5f, 0.4f);
+
+            var builder = new LandmarkSequenceBuilder();
+            for (int i = 0; i < 6; i++)
+            {
+                // Same clean oscillating fixture as the positive test above, except frame
+                // index 2 places the wrist far outside BaseProximityThreshold (0.18) -
+                // one noisy sample should be skipped, not zero out the whole window.
+                var offset = i == 2 ? 0.5f : (i % 2 == 0 ? 0.02f : 0.08f);
+                var wrist = ankle + new Vector2(0f, offset);
+                builder.AddFrame(0.1f, new Dictionary<PoseJoint, Vector2>
+                {
+                    { PoseJoint.LeftAnkle, ankle },
+                    { PoseJoint.LeftKnee, knee },
+                    { PoseJoint.RightWrist, wrist },
+                });
+            }
+
+            var matcher = new MacAndCheeseMatcher();
+            var result = matcher.Evaluate(builder.Build(), CalibrationData.Identity);
+
+            Assert.IsTrue(result.IsMatch);
+        }
+
+        [Test]
         public void Evaluate_LegNotRaised_DoesNotMatch()
         {
             var knee = new Vector2(0.5f, 0.6f);

@@ -5,32 +5,49 @@ namespace GestureDetection
 {
     public static class GestureMath
     {
-        // Counts direction reversals in a series whose swing exceeds minAmplitude.
+        // Counts direction reversals (pivots) in a series using hysteresis: a pivot is
+        // only confirmed once the series has moved at least minAmplitude AWAY from a
+        // running high/low candidate, at which point that candidate becomes the pivot
+        // and tracking restarts in the opposite direction. This is standard "zigzag"
+        // peak detection - critically, a small dip/spike inside a larger monotonic move
+        // (e.g. one noisy landmark sample during a steady rise) does NOT reset or count
+        // as a reversal, because the running candidate keeps extending past it instead
+        // of committing a pivot at the small dip itself.
         // Used to detect repeated back-and-forth motion (shaking, stomping, rubbing).
         public static int CountReversals(IReadOnlyList<float> values, float minAmplitude)
         {
             if (values.Count < 2) return 0;
 
             int reversals = 0;
-            int direction = 0;
-            float lastExtreme = values[0];
+            float extreme = values[0];
+            int trend = 0; // 0 = direction not yet established, 1 = tracking a high, -1 = tracking a low
 
             for (int i = 1; i < values.Count; i++)
             {
-                float delta = values[i] - values[i - 1];
-                if (Mathf.Abs(delta) < 1e-5f) continue;
+                float v = values[i];
 
-                int newDirection = delta > 0f ? 1 : -1;
-                if (direction != 0 && newDirection != direction)
+                if (trend >= 0 && v > extreme)
                 {
-                    if (Mathf.Abs(values[i - 1] - lastExtreme) >= minAmplitude)
-                    {
-                        reversals++;
-                        lastExtreme = values[i - 1];
-                    }
+                    extreme = v;
+                    trend = 1;
                 }
-
-                direction = newDirection;
+                else if (trend <= 0 && v < extreme)
+                {
+                    extreme = v;
+                    trend = -1;
+                }
+                else if (trend == 1 && extreme - v >= minAmplitude)
+                {
+                    reversals++;
+                    trend = -1;
+                    extreme = v;
+                }
+                else if (trend == -1 && v - extreme >= minAmplitude)
+                {
+                    reversals++;
+                    trend = 1;
+                    extreme = v;
+                }
             }
 
             return reversals;
