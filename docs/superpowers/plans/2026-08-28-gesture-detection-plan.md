@@ -2081,11 +2081,17 @@ Create `Assets/Scripts/GestureDetection/GestureDetectionDemoController.cs`:
 
 ```csharp
 using UnityEngine;
+using UnityEngine.InputSystem;
 
 namespace GestureDetection
 {
     // Press 1-5 in Play mode to simulate each gesture and confirm the
     // IGestureDetector event wiring works end-to-end without a webcam.
+    //
+    // Uses the new Input System (UnityEngine.InputSystem.Keyboard), not the
+    // legacy UnityEngine.Input class: this project's Active Input Handling
+    // (Project Settings > Player) is set to "Input System Package (New)" only,
+    // under which UnityEngine.Input.GetKeyDown throws InvalidOperationException.
     public class GestureDetectionDemoController : MonoBehaviour
     {
         [SerializeField] private StubGestureDetector stubDetector;
@@ -2098,12 +2104,15 @@ namespace GestureDetection
 
         private void Update()
         {
-            if (Input.GetKeyDown(KeyCode.Alpha1)) stubDetector.SimulateGesture(GestureType.Pizza);
-            if (Input.GetKeyDown(KeyCode.Alpha2)) stubDetector.SimulateGesture(GestureType.MacAndCheese);
-            if (Input.GetKeyDown(KeyCode.Alpha3)) stubDetector.SimulateGesture(GestureType.RocketSoda);
-            if (Input.GetKeyDown(KeyCode.Alpha4)) stubDetector.SimulateGesture(GestureType.Wine);
-            if (Input.GetKeyDown(KeyCode.Alpha5)) stubDetector.SimulateGesture(GestureType.SpicySpice);
-            if (Input.GetKeyDown(KeyCode.C)) stubDetector.SimulateCameraUnavailable();
+            var keyboard = Keyboard.current;
+            if (keyboard == null) return;
+
+            if (keyboard.digit1Key.wasPressedThisFrame) stubDetector.SimulateGesture(GestureType.Pizza);
+            if (keyboard.digit2Key.wasPressedThisFrame) stubDetector.SimulateGesture(GestureType.MacAndCheese);
+            if (keyboard.digit3Key.wasPressedThisFrame) stubDetector.SimulateGesture(GestureType.RocketSoda);
+            if (keyboard.digit4Key.wasPressedThisFrame) stubDetector.SimulateGesture(GestureType.Wine);
+            if (keyboard.digit5Key.wasPressedThisFrame) stubDetector.SimulateGesture(GestureType.SpicySpice);
+            if (keyboard.cKey.wasPressedThisFrame) stubDetector.SimulateCameraUnavailable();
         }
     }
 }
