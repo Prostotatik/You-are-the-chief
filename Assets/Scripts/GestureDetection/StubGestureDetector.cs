@@ -17,5 +17,9 @@ namespace GestureDetection
             OnGestureProgress?.Invoke(gesture, Mathf.Clamp01(progress));
 
         public void SimulateCameraUnavailable() => OnCameraUnavailable?.Invoke();
+
+        // No-op: the stub has no internal lock state - each Simulate* call is an
+        // explicit, one-shot trigger from the caller, so there's nothing to reset.
+        public void ResetLock() { }
     }
 }

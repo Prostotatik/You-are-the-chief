@@ -47,6 +47,10 @@ namespace GestureDetection
         public void ResetLock()
         {
             _lockedGesture = null;
+            // Without this, frames already in the buffer from the just-recognized gesture
+            // are still inside the next evaluation window and immediately re-match,
+            // firing OnGestureRecognized again on the very next incoming frame.
+            _buffer.Clear();
         }
 
         private void HandleLandmarkFrame(LandmarkFrame frame)

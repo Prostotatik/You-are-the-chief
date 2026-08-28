@@ -33,7 +33,9 @@ namespace GestureDetection
 
             if (sampleCount == 0) return CalibrationData.Identity;
 
-            return new CalibrationData(scaleSum / sampleCount, centerSum / sampleCount);
+            float averageShoulderWidth = scaleSum / sampleCount;
+            float bodyScale = averageShoulderWidth / CalibrationData.ReferenceBodyScale;
+            return new CalibrationData(bodyScale, centerSum / sampleCount);
         }
     }
 }
