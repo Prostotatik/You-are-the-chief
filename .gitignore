@@ -39,3 +39,4 @@ crashlytics-build.properties
 # Packages (lock file kept, cache not)
 /[Pp]ackages/packages-lock.json.meta
 .superpowers/
+.worktrees/
