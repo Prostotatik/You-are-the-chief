@@ -13,7 +13,7 @@
 - All source files and code comments in English. Chat/commit conversation may be in Russian.
 - Coordinate convention: `PoseLandmark.Position` is normalized viewport space, `(0,0)` = top-left, `(1,1)` = bottom-right — y grows downward.
 - This subsystem must not reference gameplay, scoring, or networking types.
-- No physical webcam is available in this development environment. Every task except Task 6 (Sentis/webcam integration) and Task 7 (debug overlay visual result) must be fully verifiable by EditMode unit tests with synthetic data. Task 6 is verified by code review + Console log inspection; Task 7 is verified by manual keyboard/webcam-driven interaction in the Editor once hardware is available.
+- No physical webcam is available in this development environment. Every task except Task 5 (Sentis/webcam integration) and Task 6 (debug overlay visual result) must be fully verifiable by EditMode unit tests with synthetic data. Task 5 is verified by code review + Console log inspection; Task 6 is verified by manual keyboard/webcam-driven interaction in the Editor once hardware is available.
 - Run EditMode tests via the `unity-cli` skill's test action (Unity Test Framework, EditMode, filtered to the relevant test class) after every test-writing/implementation step pair.
 - Do not modify `GestureDetector.cs`, any file under `Matchers/`, `CalibrationController.cs`, `CalibrationSequencer.cs`, `LandmarkBuffer.cs`, `GestureMath.cs`, or their tests — out of scope per design spec `docs/superpowers/specs/2026-08-29-gesture-detection-pipeline-rework-design.md`.
 
