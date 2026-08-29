@@ -19,6 +19,26 @@ namespace GestureDetection
         private int _framesReceived;
         private string _statusText = "Waiting for calibration...";
         private Texture2D _dotTexture;
+        private Texture2D _lineTexture;
+
+        // Standard BlazePose skeletal adjacency (upper body + legs); face landmarks
+        // (indices 0-10) are intentionally excluded from bones since they're only
+        // used as single confidence-gated dots, not a connected skeleton.
+        private static readonly (PoseJoint, PoseJoint)[] Bones =
+        {
+            (PoseJoint.LeftShoulder, PoseJoint.RightShoulder),
+            (PoseJoint.LeftShoulder, PoseJoint.LeftElbow),
+            (PoseJoint.LeftElbow, PoseJoint.LeftWrist),
+            (PoseJoint.RightShoulder, PoseJoint.RightElbow),
+            (PoseJoint.RightElbow, PoseJoint.RightWrist),
+            (PoseJoint.LeftShoulder, PoseJoint.LeftHip),
+            (PoseJoint.RightShoulder, PoseJoint.RightHip),
+            (PoseJoint.LeftHip, PoseJoint.RightHip),
+            (PoseJoint.LeftHip, PoseJoint.LeftKnee),
+            (PoseJoint.LeftKnee, PoseJoint.LeftAnkle),
+            (PoseJoint.RightHip, PoseJoint.RightKnee),
+            (PoseJoint.RightKnee, PoseJoint.RightAnkle),
+        };
 
         private void OnEnable()
         {
@@ -30,6 +50,7 @@ namespace GestureDetection
             _dotTexture = new Texture2D(1, 1);
             _dotTexture.SetPixel(0, 0, Color.white);
             _dotTexture.Apply();
+            _lineTexture = _dotTexture;
         }
 
         private void OnDisable()
@@ -60,6 +81,23 @@ namespace GestureDetection
             if (_latestFrame.HasValue)
             {
                 var frame = _latestFrame.Value;
+
+                foreach (var (jointA, jointB) in Bones)
+                {
+                    var a = frame.Get(jointA);
+                    var b = frame.Get(jointB);
+                    if (a.Confidence < minConfidenceToDraw || b.Confidence < minConfidenceToDraw) continue;
+
+                    Vector2 pointA = new Vector2(
+                        previewRect.x + a.Position.x * previewRect.width,
+                        previewRect.y + a.Position.y * previewRect.height);
+                    Vector2 pointB = new Vector2(
+                        previewRect.x + b.Position.x * previewRect.width,
+                        previewRect.y + b.Position.y * previewRect.height);
+
+                    DrawLine(pointA, pointB, Color.cyan, thickness: 2f);
+                }
+
                 for (int i = 0; i < PoseJointCount.Value; i++)
                 {
                     var landmark = frame.Joints[i];
@@ -84,6 +122,25 @@ namespace GestureDetection
                 $"Status: {_statusText}\n" +
                 $"Landmark frames received: {_framesReceived}\n" +
                 $"Camera unavailable: {poseProvider.IsCameraUnavailable}");
+        }
+
+        private void DrawLine(Vector2 pointA, Vector2 pointB, Color color, float thickness)
+        {
+            Vector2 delta = pointB - pointA;
+            float length = delta.magnitude;
+            if (length < 0.001f) return;
+
+            float angle = Mathf.Atan2(delta.y, delta.x) * Mathf.Rad2Deg;
+
+            var prevColor = GUI.color;
+            var prevMatrix = GUI.matrix;
+
+            GUI.color = color;
+            GUIUtility.RotateAroundPivot(angle, pointA);
+            GUI.DrawTexture(new Rect(pointA.x, pointA.y - thickness * 0.5f, length, thickness), _lineTexture);
+
+            GUI.matrix = prevMatrix;
+            GUI.color = prevColor;
         }
     }
 }
