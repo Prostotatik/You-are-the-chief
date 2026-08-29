@@ -59,15 +59,48 @@ namespace GestureDetection
             return new PoseCropRegion(center, size);
         }
 
-        // Converts a region into the (scale, offset) pair Graphics.Blit(Texture,
-        // RenderTexture, Vector2 scale, Vector2 offset) expects: it samples the source
-        // texture at uv * scale + offset, so this maps blit-space uv=(0,0)..(1,1) onto
-        // the region's own min..max corners in source-texture UV space.
+        // Converts a region into the (scale, offset) pair used to map a normalized
+        // position within the crop (blit-space, 0..1) back to a position in the full
+        // source texture - both sides of this transform are in this project's native
+        // y-down convention (PoseLandmark.Position: (0,0) top-left, y grows downward).
+        // sourcePosition = cropPosition * scale + offset.
         public static (Vector2 scale, Vector2 offset) ToUvTransform(PoseCropRegion region)
         {
             Vector2 scale = new Vector2(region.Size, region.Size);
             Vector2 offset = region.Center - scale * 0.5f;
             return (scale, offset);
+        }
+
+        // Converts a y-down ToUvTransform() pair into the (scale, offset) that must be
+        // passed to Graphics.Blit(Texture, RenderTexture, Vector2 scale, Vector2 offset)
+        // to physically sample the SAME region.
+        //
+        // Graphics.Blit samples the source texture in UV space, which is y-UP (v=0 is
+        // the texture's bottom edge, v=1 is its top edge) - the opposite of this
+        // project's y-down convention that ToUvTransform's offset/scale are expressed
+        // in. Feeding a y-down (scale, offset) straight into Blit samples the vertically
+        // mirrored region. This performs the one corrective y-flip needed, keeping the
+        // x axis (which has no convention mismatch) untouched.
+        //
+        // Derivation: a y-down region spans yd in [offset.y, offset.y + scale.y] (top
+        // edge to bottom edge). The corresponding texture-v coordinate for a y-down
+        // value yd is v = 1 - yd (v grows upward, yd grows downward). To have
+        // blit-space t=0 sample the region's physical TOP edge (v = 1 - offset.y) and
+        // blit-space t=1 sample its physical BOTTOM edge (v = 1 - (offset.y +
+        // scale.y)), solve v = t * scale'.y + offset'.y for the two endpoints:
+        //   offset'.y = 1 - offset.y
+        //   scale'.y  = (1 - (offset.y + scale.y)) - (1 - offset.y) = -scale.y
+        // Worked example: region Center=(0.5, 0.2), Size=0.3 (near the top of a y-down
+        // frame) -> ToUvTransform gives offset=(0.35, 0.05), scale=(0.3, 0.3). This
+        // method gives offset'=(0.35, 0.95), scale'=(0.3, -0.3), so blit-space t=0 samples
+        // v=0.95 and t=1 samples v=0.65 - both in the texture's upper half (v close to
+        // 1), i.e. physically the top-ish strip of the source texture, matching y-down
+        // intuition. See PoseCropTests for the algebraic round-trip that pins this.
+        public static (Vector2 scale, Vector2 offset) ToBlitTransform(Vector2 scale, Vector2 offset)
+        {
+            Vector2 blitScale = new Vector2(scale.x, -scale.y);
+            Vector2 blitOffset = new Vector2(offset.x, 1f - offset.y);
+            return (blitScale, blitOffset);
         }
     }
 }

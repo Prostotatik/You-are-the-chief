@@ -55,6 +55,12 @@ namespace GestureDetection
 
         private const int DetectorInputSize = 224;
         private const int DetectorAnchorCount = 2254;
+        // Per-anchor box channels: [dx, dy, dw, dh, kp1x, kp1y, kp2x, kp2y, ...] (12
+        // total per row; only the first 8 are read here). dx/dy (indices 0-1) are the
+        // box-center offset from the anchor, used below for boxCenter. dw/dh (indices
+        // 2-3) are the box width/height offset and are NOT used - crop size instead
+        // comes from the distance between the two alignment keypoints (kp1, kp2 at
+        // indices 4-7), matching Unity's own BlazeDetectionSample.
         private const int DetectorBoxStride = 12;
         private const float DetectorScoreThreshold = 0.5f;
 
@@ -62,10 +68,22 @@ namespace GestureDetection
         private const int LandmarkerOutputStride = 5;
         private const int LandmarkerVisibilityOffset = 3;
 
+        // Explicit names for PoseCrop.FromLandmarkBounds's default arguments (used in
+        // Update() below) so the tuning knobs are visible at the call site instead of
+        // hidden behind method-default values.
+        private const float LandmarkBoundsMinConfidence = 0.4f;
+        private const float LandmarkBoundsPaddingFraction = 0.35f;
+
         // Once a landmark-derived crop region has been used this many consecutive
         // frames, force a fresh detector pass rather than drifting indefinitely on
         // landmark-bounds-only crops (mirrors MediaPipe's periodic re-detect safety net).
         private const int MaxFramesBetweenDetections = 30;
+
+        // If the detector is forced to run this many consecutive frames in a row (e.g.
+        // because FromLandmarkBounds keeps failing to find 2 confident joints even
+        // though the detector keeps finding a person), log once so this expensive
+        // failure mode isn't silent.
+        private const int DetectorEveryFrameWarnThreshold = 15;
 
         public event Action<LandmarkFrame> OnLandmarkFrame;
         public event Action OnCameraUnavailable;
@@ -89,6 +107,8 @@ namespace GestureDetection
         private bool _hasReceivedFirstFrame;
         private PoseCropRegion? _currentRegion;
         private int _framesSinceDetection;
+        private int _consecutiveForcedDetections;
+        private bool _hasWarnedDetectorEveryFrame;
 
         private void Start()
         {
@@ -121,7 +141,15 @@ namespace GestureDetection
 
             _detectorInputTensor = new Tensor<float>(new TensorShape(1, DetectorInputSize, DetectorInputSize, 3));
             _landmarkerInputTensor = new Tensor<float>(new TensorShape(1, LandmarkerInputSize, LandmarkerInputSize, 3));
-            _cropTexture = new RenderTexture(LandmarkerInputSize, LandmarkerInputSize, 0);
+            _cropTexture = new RenderTexture(LandmarkerInputSize, LandmarkerInputSize, 0)
+            {
+                // A crop region can extend past [0,1] (PoseCrop.FromDetection's 1.25x
+                // scale and FromLandmarkBounds's 1.35x padding both can push past the
+                // frame edge) - clamp so Graphics.Blit samples the edge pixel instead of
+                // wrapping around to the opposite side of the source texture.
+                wrapMode = TextureWrapMode.Clamp,
+            };
+            _cropTexture.Create();
         }
 
         private void Update()
@@ -147,11 +175,30 @@ namespace GestureDetection
             _hasReceivedFirstFrame = true;
             _timeSinceLastFrame = 0f;
 
-            bool needsDetection = !_currentRegion.HasValue || _framesSinceDetection >= MaxFramesBetweenDetections;
+            // _framesSinceDetection only ever counts consecutive frames that ran the
+            // landmarker against a landmark-derived region (never a frame that ran the
+            // detector) - see the increment site below, after RunLandmarker.
+            bool wasRegionLost = !_currentRegion.HasValue;
+            bool needsDetection = wasRegionLost || _framesSinceDetection >= MaxFramesBetweenDetections;
             if (needsDetection)
             {
                 _currentRegion = RunDetector();
                 _framesSinceDetection = 0;
+
+                // Track the "detector forced every frame with no backoff" failure mode:
+                // a region that was lost (not the normal periodic re-detect) and stays
+                // lost/never regains 2 confident joints will hit this branch every
+                // single Update(). The periodic MaxFramesBetweenDetections re-detect
+                // resets this counter below once a landmark-derived region resumes.
+                if (wasRegionLost)
+                {
+                    _consecutiveForcedDetections++;
+                    if (_consecutiveForcedDetections >= DetectorEveryFrameWarnThreshold && !_hasWarnedDetectorEveryFrame)
+                    {
+                        _hasWarnedDetectorEveryFrame = true;
+                        Debug.LogWarning($"{nameof(SentisPoseProvider)}: detector has run {_consecutiveForcedDetections} consecutive frames because landmark bounds keep failing to find 2 confident joints - falling back to detector-every-frame.", this);
+                    }
+                }
             }
 
             if (!_currentRegion.HasValue)
@@ -162,13 +209,22 @@ namespace GestureDetection
             }
 
             var rawFrame = RunLandmarker(_currentRegion.Value);
-            _framesSinceDetection++;
 
             // Prefer next frame's crop from this frame's own landmarks (cheap, matches
             // MediaPipe's re-detect-on-loss behavior) - but only if enough joints were
             // confidently found; otherwise force a fresh detector pass next frame.
-            var boundsRegion = PoseCrop.FromLandmarkBounds(rawFrame);
+            var boundsRegion = PoseCrop.FromLandmarkBounds(rawFrame, LandmarkBoundsMinConfidence, LandmarkBoundsPaddingFraction);
             _currentRegion = boundsRegion.Size > 0f ? boundsRegion : (PoseCropRegion?)null;
+
+            if (_currentRegion.HasValue)
+            {
+                // A usable landmark-derived region was produced for next frame - this
+                // counts toward the MaxFramesBetweenDetections budget, and the region is
+                // no longer "lost" so the forced-detection backoff counter resets.
+                _framesSinceDetection++;
+                _consecutiveForcedDetections = 0;
+                _hasWarnedDetectorEveryFrame = false;
+            }
 
             var smoothedFrame = _smoother.Smooth(rawFrame);
             OnLandmarkFrame?.Invoke(smoothedFrame);
@@ -186,6 +242,16 @@ namespace GestureDetection
 
             var boxes = boxesOutput.DownloadToArray();
             var scores = scoresOutput.DownloadToArray();
+
+            // Guard against the detector model's actual output shape ever differing from
+            // the hardcoded DetectorAnchorCount/DetectorBoxStride assumption above - a
+            // mismatch here would otherwise throw IndexOutOfRangeException every single
+            // Update() call. Degrade to "no detection this frame" instead.
+            if (scores.Length < DetectorAnchorCount || boxes.Length < DetectorAnchorCount * DetectorBoxStride)
+            {
+                Debug.LogError($"{nameof(SentisPoseProvider)}: detector output shape mismatch (scores={scores.Length}, boxes={boxes.Length}, expected scores>={DetectorAnchorCount}, boxes>={DetectorAnchorCount * DetectorBoxStride}) - skipping detection this frame.", this);
+                return null;
+            }
 
             int bestIndex = -1;
             float bestScore = DetectorScoreThreshold;
@@ -222,7 +288,14 @@ namespace GestureDetection
         private LandmarkFrame RunLandmarker(PoseCropRegion region)
         {
             var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
-            Graphics.Blit(_webcamTexture, _cropTexture, uvScale, uvOffset);
+
+            // Graphics.Blit samples its source in y-UP UV space, but uvScale/uvOffset
+            // above are in this project's native y-DOWN convention (see PoseLandmark's
+            // doc comment and PoseCrop.ToBlitTransform for the full derivation). Flip
+            // once here, at the Blit call site only - sourcePosition below keeps using
+            // the unflipped y-down uvScale/uvOffset since cropX/cropY are also y-down.
+            var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
+            Graphics.Blit(_webcamTexture, _cropTexture, blitScale, blitOffset);
 
             var transform = new TextureTransform().SetTensorLayout(TensorLayout.NHWC);
             TextureConverter.ToTensor(_cropTexture, _landmarkerInputTensor, transform);
@@ -246,11 +319,15 @@ namespace GestureDetection
                 float cropX = downloaded[baseIndex] / LandmarkerInputSize;
                 float cropY = downloaded[baseIndex + 1] / LandmarkerInputSize;
 
-                // Map from the crop's own [0,1] space back into full-source-texture
-                // [0,1] space using the same axis-aligned region used to build the crop
-                // (uv * scale + offset - the inverse of Graphics.Blit's own sampling,
-                // see PoseCrop.ToUvTransform). uvScale/uvOffset are loop-invariant (same
-                // region every iteration) so they're computed once above, not per-joint.
+                // Map from the crop's own y-down [0,1] space back into full-source-texture
+                // y-down [0,1] space using the same axis-aligned region used to build the
+                // crop (uv * scale + offset, see PoseCrop.ToUvTransform). Deliberately uses
+                // the UNFLIPPED uvScale/uvOffset here, not blitScale/blitOffset: cropX/cropY
+                // are y-down (MediaPipe pixel-row convention) and uvScale/uvOffset are also
+                // y-down, so this axis matches directly - the y-flip only applies at the
+                // Graphics.Blit call site above, which samples in y-up UV space. uvScale/
+                // uvOffset are loop-invariant (same region every iteration) so they're
+                // computed once above, not per-joint.
                 Vector2 sourcePosition = new Vector2(cropX, cropY) * uvScale + uvOffset;
 
                 // UNVERIFIED: assumes this graph's visibility output is already a [0,1]
@@ -290,7 +367,12 @@ namespace GestureDetection
             _landmarkerWorker?.Dispose();
             _detectorInputTensor?.Dispose();
             _landmarkerInputTensor?.Dispose();
-            if (_cropTexture != null) _cropTexture.Release();
+            if (_cropTexture != null)
+            {
+                _cropTexture.Release();
+                UnityEngine.Object.Destroy(_cropTexture);
+                _cropTexture = null;
+            }
         }
 
         private void RaiseCameraUnavailable()
