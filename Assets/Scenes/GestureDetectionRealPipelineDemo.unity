@@ -192,7 +192,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: a52242b50864276468ec361006976d9d, type: 3}
   m_Name: 
   m_EditorClassIdentifier: GestureDetection::GestureDetection.SentisPoseProvider
-  modelAsset: {fileID: 5022602860645237092, guid: 2af7d9c845e4f6b499050bb9dfee3b98, type: 3}
+  detectorModelAsset: {fileID: 5022602860645237092, guid: e2b5f0034b81e694ea979eecb6b57aa9, type: 3}
+  landmarkerModelAsset: {fileID: 5022602860645237092, guid: 2af7d9c845e4f6b499050bb9dfee3b98, type: 3}
+  detectorAnchorsCsv: {fileID: 4900000, guid: 9cdd4ed4bdab93144a6a7f892aa9b79b, type: 3}
   webcamRequestWidth: 640
   webcamRequestHeight: 480
 --- !u!4 &569946953
