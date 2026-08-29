@@ -298,7 +298,10 @@ namespace GestureDetection
 
         private LandmarkFrame RunLandmarker(PoseCropRegion region)
         {
-            var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
+            // sourceWidth/sourceHeight let ToUvTransform correct for the webcam's
+            // non-square aspect ratio (e.g. 640x480) so the region sampled below is
+            // physically square, not just UV-square - see ToUvTransform's doc comment.
+            var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region, _webcamTexture.width, _webcamTexture.height);
 
             // uvScale/uvOffset are in this project's native y-DOWN convention, but the
             // two hops below (Graphics.Blit into _cropTexture, then

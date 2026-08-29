@@ -4,7 +4,18 @@ namespace GestureDetection
 {
     // An axis-aligned square region of the source webcam texture to crop and feed to
     // the 256x256 landmarker model. Center and Size are normalized to the source
-    // texture's own [0,1] UV space (Size as a fraction of max(sourceWidth, sourceHeight)).
+    // texture's own [0,1] UV space, with Size a fraction of max(sourceWidth,
+    // sourceHeight) - i.e. Center/Size describe a PHYSICALLY square region, not a
+    // UV-square one. On a non-square source (e.g. 640x480) a UV-equal-on-both-axes
+    // square is not physically square: a fixed UV delta covers more physical pixels on
+    // the wider axis. ToUvTransform is where this gets corrected into the actual
+    // (possibly non-equal) UV scale needed to sample a physically-square region - see
+    // its doc comment. FromDetection/FromLandmarkBounds below compute Size from UV-space
+    // distances and do NOT apply this correction themselves (they're also subject to the
+    // same distortion if the source keypoints/bounds aren't purely horizontal), so Size
+    // as produced by them is an approximation of the physical span; ToUvTransform is the
+    // single point where physical-square correctness is actually enforced, since that's
+    // where pixels are physically sampled.
     //
     // Unlike Unity's own BlazePose sample, this deliberately carries no rotation: that
     // sample rotates its crop to handle a person lying sideways or upside-down, which
@@ -37,6 +48,13 @@ namespace GestureDetection
             return new PoseCropRegion(boxCenter, size);
         }
 
+        // Below this, a landmark-bounds span isn't a real detection - it's noise (e.g.
+        // the landmarker output collapsing onto near-identical positions for >=2
+        // joints). Without this guard a tiny non-zero span still passes Update()'s
+        // `boundsRegion.Size > 0f` check and gets fed to the landmarker as a
+        // sub-pixel-wide crop for up to MaxFramesBetweenDetections frames.
+        private const float MinUsableSpan = 0.02f; // ~2% of frame
+
         public static PoseCropRegion FromLandmarkBounds(LandmarkFrame frame, float minConfidence = 0.4f, float paddingFraction = 0.35f)
         {
             Vector2 min = new Vector2(float.MaxValue, float.MaxValue);
@@ -53,8 +71,10 @@ namespace GestureDetection
 
             if (count < 2) return default;
 
-            Vector2 center = (min + max) * 0.5f;
             float span = Mathf.Max(max.x - min.x, max.y - min.y);
+            if (span < MinUsableSpan) return default;
+
+            Vector2 center = (min + max) * 0.5f;
             float size = span * (1f + paddingFraction);
             return new PoseCropRegion(center, size);
         }
@@ -64,9 +84,30 @@ namespace GestureDetection
         // source texture - both sides of this transform are in this project's native
         // y-down convention (PoseLandmark.Position: (0,0) top-left, y grows downward).
         // sourcePosition = cropPosition * scale + offset.
-        public static (Vector2 scale, Vector2 offset) ToUvTransform(PoseCropRegion region)
+        //
+        // sourceWidth/sourceHeight correct for a non-square source so the UV rect
+        // sampled is PHYSICALLY square (matching PoseCropRegion's doc comment: Size is a
+        // fraction of max(sourceWidth, sourceHeight)), not merely UV-square. A fixed UV
+        // delta covers more physical pixels on the wider axis, so the narrower axis's UV
+        // span must be inflated by the source's aspect ratio to cover the same physical
+        // distance as the wider axis.
+        //
+        // Worked example: sourceWidth=640, sourceHeight=480 (4:3), Size=0.3. The intended
+        // physical square is Size * max(640,480) = 192x192 px. Uncorrected UV scale
+        // (0.3, 0.3) would sample 0.3*640=192px horizontally but only 0.3*480=144px
+        // vertically - a 192x144 rect, not square. Corrected: x keeps span 0.3 (192px,
+        // already right since width is the max dimension); y-span becomes
+        // 0.3 * (640/480) = 0.4, i.e. 0.4*480=192px - now physically square. In general,
+        // for source wider than tall (sourceWidth >= sourceHeight): scale.x = Size,
+        // scale.y = Size * (sourceWidth / sourceHeight). For source taller than wide:
+        // scale.y = Size, scale.x = Size * (sourceHeight / sourceWidth). Both reduce to
+        // scale = Size * maxDimension / axisDimension.
+        public static (Vector2 scale, Vector2 offset) ToUvTransform(PoseCropRegion region, int sourceWidth, int sourceHeight)
         {
-            Vector2 scale = new Vector2(region.Size, region.Size);
+            float maxDimension = Mathf.Max(sourceWidth, sourceHeight);
+            Vector2 scale = new Vector2(
+                region.Size * (maxDimension / sourceWidth),
+                region.Size * (maxDimension / sourceHeight));
             Vector2 offset = region.Center - scale * 0.5f;
             return (scale, offset);
         }
@@ -117,12 +158,17 @@ namespace GestureDetection
         //
         // The x axis needs no correction - neither hop touches it.
         //
-        // Worked example: region Center=(0.5, 0.2), Size=0.3 -> ToUvTransform gives
-        // scale=(0.3, 0.3), offset=(0.35, 0.05). This method gives blitScale=(0.3, 0.3),
-        // blitOffset=(0.35, 0.65). Landmarker cropY=0 -> t = 1 -> v_src = 0.3 + 0.65 =
-        // 0.95 -> y-down 0.05 = offset.y. Landmarker cropY=1 -> t = 0 -> v_src = 0.65 ->
-        // y-down 0.35 = offset.y + scale.y. Both ends round-trip. See PoseCropTests for
+        // Worked example: region Center=(0.5, 0.2), Size=0.3, source 640x480 (4:3) ->
+        // ToUvTransform gives scale=(0.3, 0.4) (aspect-corrected per its own doc
+        // comment), offset=(0.35, 0.0). This method gives blitScale=(0.3, 0.4),
+        // blitOffset=(0.35, 0.6). Landmarker cropY=0 -> t = 1 -> v_src = 0.4 + 0.6 = 1.0
+        // -> y-down 0.0 = offset.y. Landmarker cropY=1 -> t = 0 -> v_src = 0.6 ->
+        // y-down 0.4 = offset.y + scale.y. Both ends round-trip. See PoseCropTests for
         // the test that models both hops independently and pins these numbers.
+        // (This formula's derivation is agnostic to whether scale.x == scale.y - it only
+        // reasons about the y axis in isolation - so it is unaffected by ToUvTransform's
+        // aspect correction; only the numbers above changed to reflect a non-square
+        // scale.)
         public static (Vector2 scale, Vector2 offset) ToBlitTransform(Vector2 scale, Vector2 offset)
         {
             Vector2 blitScale = new Vector2(scale.x, scale.y);

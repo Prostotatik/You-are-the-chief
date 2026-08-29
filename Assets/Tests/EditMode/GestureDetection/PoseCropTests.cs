@@ -62,11 +62,48 @@ namespace GestureDetection.Tests
             Assert.AreEqual(0f, region.Size);
         }
 
+        // The two tests below use literal span thresholds mirroring PoseCrop.
+        // FromLandmarkBounds's private MinUsableSpan (0.02f) - if that constant's value
+        // changes, these thresholds (just inside/outside it) need to move with it.
+        [Test]
+        public void FromLandmarkBounds_JointsClusteredWithinMinSpan_ReturnsZeroSizeRegion()
+        {
+            // Two confident joints, but collapsed onto nearly identical positions - span
+            // (0.01) is below MinUsableSpan (0.02), so this should be treated the same as
+            // "fewer than two confident joints": a degenerate detection, not a real one.
+            var frame = FrameFromJoints(new Dictionary<PoseJoint, Vector2>
+            {
+                { PoseJoint.LeftShoulder, new Vector2(0.50f, 0.30f) },
+                { PoseJoint.RightShoulder, new Vector2(0.51f, 0.30f) }, // span 0.01 < 0.02
+            });
+
+            var region = PoseCrop.FromLandmarkBounds(frame, minConfidence: 0.4f, paddingFraction: 0.35f);
+
+            Assert.AreEqual(0f, region.Size);
+        }
+
+        [Test]
+        public void FromLandmarkBounds_JointsJustOutsideMinSpan_ReturnsValidNonZeroRegion()
+        {
+            // Span (0.03) is just outside MinUsableSpan (0.02) - should produce a normal,
+            // valid padded region rather than being treated as degenerate.
+            var frame = FrameFromJoints(new Dictionary<PoseJoint, Vector2>
+            {
+                { PoseJoint.LeftShoulder, new Vector2(0.50f, 0.30f) },
+                { PoseJoint.RightShoulder, new Vector2(0.53f, 0.30f) }, // span 0.03 > 0.02
+            });
+
+            var region = PoseCrop.FromLandmarkBounds(frame, minConfidence: 0.4f, paddingFraction: 0.35f);
+
+            Assert.Greater(region.Size, 0f);
+            Assert.AreEqual(0.03f * 1.35f, region.Size, 0.001f);
+        }
+
         [Test]
         public void ToUvTransform_CenteredRegion_OffsetsByHalfSizeFromCenter()
         {
             var region = new PoseCropRegion(new Vector2(0.5f, 0.5f), 0.3f);
-            var (scale, offset) = PoseCrop.ToUvTransform(region);
+            var (scale, offset) = PoseCrop.ToUvTransform(region, sourceWidth: 100, sourceHeight: 100);
 
             Assert.AreEqual(0.3f, scale.x, 0.001f);
             Assert.AreEqual(0.3f, scale.y, 0.001f);
@@ -78,7 +115,7 @@ namespace GestureDetection.Tests
         public void ToUvTransform_OffCenterRegion_SamplingCornerAndOppositeCornerBoundTheRegion()
         {
             var region = new PoseCropRegion(new Vector2(0.6f, 0.4f), 0.2f);
-            var (scale, offset) = PoseCrop.ToUvTransform(region);
+            var (scale, offset) = PoseCrop.ToUvTransform(region, sourceWidth: 100, sourceHeight: 100);
 
             // uv=(0,0) must land on the region's min corner, uv=(1,1) on its max corner.
             Vector2 minCorner = Vector2.zero * scale + offset;
@@ -87,6 +124,45 @@ namespace GestureDetection.Tests
             Assert.AreEqual(0.3f, minCorner.y, 0.001f); // 0.4 - 0.1
             Assert.AreEqual(0.7f, maxCorner.x, 0.001f); // 0.6 + 0.1
             Assert.AreEqual(0.5f, maxCorner.y, 0.001f); // 0.4 + 0.1
+        }
+
+        [Test]
+        public void ToUvTransform_NonSquareSource_CorrectsNarrowerAxisToBePhysicallySquare()
+        {
+            // Worked example (matches PoseCrop.ToUvTransform's doc comment): 640x480
+            // source (4:3, wider than tall), Size=0.3. Intended physical square is
+            // Size * max(640,480) = 192x192 px. Uncorrected UV scale (0.3, 0.3) would
+            // sample 192px horizontally but only 144px vertically. Corrected: x keeps
+            // span 0.3 (already 192px, the max dimension), y-span becomes
+            // 0.3 * (640/480) = 0.4 (192px).
+            var region = new PoseCropRegion(new Vector2(0.5f, 0.5f), 0.3f);
+            var (scale, _) = PoseCrop.ToUvTransform(region, sourceWidth: 640, sourceHeight: 480);
+
+            Assert.AreEqual(0.3f, scale.x, 0.0001f);
+            Assert.AreEqual(0.4f, scale.y, 0.0001f);
+
+            // Confirm both axes now cover the same PHYSICAL pixel span.
+            float physicalWidthPx = scale.x * 640;
+            float physicalHeightPx = scale.y * 480;
+            Assert.AreEqual(192f, physicalWidthPx, 0.01f);
+            Assert.AreEqual(192f, physicalHeightPx, 0.01f);
+            Assert.AreEqual(physicalWidthPx, physicalHeightPx, 0.01f);
+        }
+
+        [Test]
+        public void ToUvTransform_TallerThanWideSource_CorrectsXAxisInstead()
+        {
+            // Mirror case: source taller than wide (e.g. a portrait-oriented capture).
+            // Now height is the max dimension, so y keeps span Size and x is inflated.
+            var region = new PoseCropRegion(new Vector2(0.5f, 0.5f), 0.3f);
+            var (scale, _) = PoseCrop.ToUvTransform(region, sourceWidth: 480, sourceHeight: 640);
+
+            Assert.AreEqual(0.3f, scale.y, 0.0001f);
+            Assert.AreEqual(0.4f, scale.x, 0.0001f); // 0.3 * (640/480)
+
+            float physicalWidthPx = scale.x * 480;
+            float physicalHeightPx = scale.y * 640;
+            Assert.AreEqual(physicalWidthPx, physicalHeightPx, 0.01f);
         }
 
         // Simulates the REAL two-hop pipeline in SentisPoseProvider.RunLandmarker,
@@ -117,15 +193,17 @@ namespace GestureDetection.Tests
         public void BlitTransform_BothHopsComposed_CropYExtremesLandOnRegionTopAndBottomEdges()
         {
             // Worked example: a region near the top of a y-down frame (small Center.y =
-            // "above"). Its y-down top edge is 0.2 - 0.15 = 0.05, its bottom edge
-            // 0.2 + 0.15 = 0.35. These two expected numbers are computed by hand here,
+            // "above"), sampled from a 640x480 (4:3) source so uvScale.y is
+            // aspect-corrected to Size * (640/480) = 0.3 * 1.33333... = 0.4 (not 0.3).
+            // Its y-down top edge is 0.2 - 0.4*0.5 = 0.0, its bottom edge
+            // 0.2 + 0.4*0.5 = 0.4. These two expected numbers are computed by hand here,
             // NOT derived from ToBlitTransform, so a wrong blit transform cannot make
             // the assertions move with it.
             var region = new PoseCropRegion(new Vector2(0.5f, 0.2f), 0.3f);
-            const float expectedTopEdgeYDown = 0.05f;
-            const float expectedBottomEdgeYDown = 0.35f;
+            const float expectedTopEdgeYDown = 0.0f;
+            const float expectedBottomEdgeYDown = 0.4f;
 
-            var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
+            var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region, sourceWidth: 640, sourceHeight: 480);
             var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
 
             // The landmarker's cropY = 0 is the crop's own y-down top row; pushed back
@@ -166,7 +244,9 @@ namespace GestureDetection.Tests
 
             foreach (var region in regions)
             {
-                var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
+                // Non-square source so this also exercises the aspect-corrected,
+                // non-uniform scale.x != scale.y case end-to-end.
+                var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region, sourceWidth: 640, sourceHeight: 480);
                 var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
 
                 foreach (float cropY in new[] { 0f, 0.25f, 0.5f, 0.75f, 1f })
