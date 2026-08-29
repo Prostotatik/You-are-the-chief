@@ -89,70 +89,97 @@ namespace GestureDetection.Tests
             Assert.AreEqual(0.5f, maxCorner.y, 0.001f); // 0.4 + 0.1
         }
 
-        [Test]
-        public void ToBlitTransform_TopRegion_SamplesPhysicalTopOfSourceTexture()
+        // Simulates the REAL two-hop pipeline in SentisPoseProvider.RunLandmarker,
+        // modelled here from first principles rather than by reusing any formula from
+        // the code under test:
+        //
+        //   Hop 2 (TextureConverter.ToTensor, CoordOrigin.TopLeft - the default left in
+        //   place by `new TextureTransform().SetTensorLayout(TensorLayout.NHWC)`): the
+        //   conversion shader does `O_pos.y = O_size.y - 1 - O_pos.y`, so tensor row 0
+        //   (landmarker cropY = 0) reads the crop texture's PHYSICAL TOP row. Normalized,
+        //   the crop-texture UV read for a given cropY is t = 1 - cropY.
+        //
+        //   Hop 1 (Graphics.Blit): the destination UV t samples the source at
+        //   v = t * blitScale.y + blitOffset.y (identity for scale=1/offset=0).
+        //
+        // Then source UV -> this project's y-down convention: yd = 1 - v.
+        //
+        // Returns the y-down source coordinate a landmark reported at `cropY` actually
+        // came from, given the blit transform the provider used.
+        private static float SourceYDownForLandmarkerCropY(float cropY, Vector2 blitScale, Vector2 blitOffset)
         {
-            // Worked example from the task: a region near the top of a y-down frame
-            // (small Center.y = "above") must, once fed to Graphics.Blit (which samples
-            // in y-UP UV space, v=0 bottom / v=1 top), land near v=1 (physical top),
-            // not v=0 (physical bottom).
-            var region = new PoseCropRegion(new Vector2(0.5f, 0.2f), 0.3f);
-            var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
-            var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
-
-            // x axis is untouched by the flip.
-            Assert.AreEqual(uvScale.x, blitScale.x, 0.0001f);
-            Assert.AreEqual(uvOffset.x, blitOffset.x, 0.0001f);
-
-            // blit-space t=0 (first row written into the crop texture, i.e. the crop's
-            // own y-down "top") must sample source texture-v = 1 - (Center.y - Size/2)
-            // = 0.95 - close to v=1, the source texture's physical top edge.
-            float vAtBlitTop = 0f * blitScale.y + blitOffset.y;
-            Assert.AreEqual(0.95f, vAtBlitTop, 0.001f);
-
-            // blit-space t=1 (the crop's own y-down "bottom") must sample source
-            // texture-v = 1 - (Center.y + Size/2) = 0.65 - still in the upper half
-            // (v > 0.5), confirming the whole region samples the physical top-ish strip.
-            float vAtBlitBottom = 1f * blitScale.y + blitOffset.y;
-            Assert.AreEqual(0.65f, vAtBlitBottom, 0.001f);
-            Assert.Greater(vAtBlitBottom, 0.5f);
+            float cropTextureT = 1f - cropY;                              // Hop 2: TopLeft flip
+            float sourceV = cropTextureT * blitScale.y + blitOffset.y;    // Hop 1: Blit
+            return 1f - sourceV;                                          // UV -> y-down
         }
 
         [Test]
-        public void BlitTransform_RoundTrip_CropYMapsBackToOriginalYDownSourcePosition()
+        public void BlitTransform_BothHopsComposed_CropYExtremesLandOnRegionTopAndBottomEdges()
         {
-            // Pins the Critical y-axis fix end-to-end: a known y-down PoseCropRegion is
-            // converted for Graphics.Blit sampling (ToBlitTransform, y-up), then a
-            // synthetic landmarker cropY (y-down, MediaPipe pixel-row convention) is
-            // mapped back into source space using the ORIGINAL y-down transform
-            // (ToUvTransform) - exactly as SentisPoseProvider.RunLandmarker does. The
-            // round trip must reproduce the same y-down source coordinate regardless of
-            // the y-flip applied only at the Blit call site.
+            // Worked example: a region near the top of a y-down frame (small Center.y =
+            // "above"). Its y-down top edge is 0.2 - 0.15 = 0.05, its bottom edge
+            // 0.2 + 0.15 = 0.35. These two expected numbers are computed by hand here,
+            // NOT derived from ToBlitTransform, so a wrong blit transform cannot make
+            // the assertions move with it.
             var region = new PoseCropRegion(new Vector2(0.5f, 0.2f), 0.3f);
+            const float expectedTopEdgeYDown = 0.05f;
+            const float expectedBottomEdgeYDown = 0.35f;
+
             var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
             var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
 
-            // A joint sitting at the physical top-left of the crop, i.e. crop-space
-            // (cropX, cropY) = (0, 0) in y-down terms (top-left origin, per
-            // PoseLandmark's contract).
-            Vector2 cropPosition = new Vector2(0f, 0f);
+            // The landmarker's cropY = 0 is the crop's own y-down top row; pushed back
+            // through both hops it must land on the region's top edge in the source.
+            Assert.AreEqual(
+                expectedTopEdgeYDown,
+                SourceYDownForLandmarkerCropY(0f, blitScale, blitOffset),
+                0.0001f,
+                "cropY=0 must trace back through ToTensor's TopLeft flip and the Blit to the region's y-down top edge");
 
-            // The provider maps this back using the UNFLIPPED y-down transform.
-            Vector2 sourcePosition = cropPosition * uvScale + uvOffset;
+            // cropY = 1 is the crop's y-down bottom row -> the region's bottom edge.
+            Assert.AreEqual(
+                expectedBottomEdgeYDown,
+                SourceYDownForLandmarkerCropY(1f, blitScale, blitOffset),
+                0.0001f,
+                "cropY=1 must trace back through ToTensor's TopLeft flip and the Blit to the region's y-down bottom edge");
 
-            // Expected: the region's own top-left corner in y-down source space.
-            Vector2 expectedTopLeft = region.Center - new Vector2(region.Size, region.Size) * 0.5f;
-            Assert.AreEqual(expectedTopLeft.x, sourcePosition.x, 0.0001f);
-            Assert.AreEqual(expectedTopLeft.y, sourcePosition.y, 0.0001f);
+            // x axis has no convention mismatch on either hop and must pass through.
+            Assert.AreEqual(uvScale.x, blitScale.x, 0.0001f);
+            Assert.AreEqual(uvOffset.x, blitOffset.x, 0.0001f);
+        }
 
-            // Cross-check against the physical texture row Graphics.Blit would actually
-            // read for this same corner: blit-space t=0 (dest row 0, the crop's y-down
-            // "top") samples source texture-v = blitOffset.y. Converting that v back to
-            // a y-down coordinate (yd = 1 - v) must equal sourcePosition.y - i.e. the
-            // pixel Blit physically sampled is the same one the back-projection assumes.
-            float physicalV = 0f * blitScale.y + blitOffset.y;
-            float physicalYDown = 1f - physicalV;
-            Assert.AreEqual(sourcePosition.y, physicalYDown, 0.0001f);
+        [Test]
+        public void BlitTransform_BothHopsComposed_AgreesWithBackProjectionAcrossTheWholeCropForSeveralRegions()
+        {
+            // The provider back-projects landmarks with `cropPos * uvScale + uvOffset`
+            // (plain y-down). For the pipeline to be correct, that must equal what the
+            // two physical hops actually sampled, for EVERY cropY - not just one point,
+            // which a single-sample test could satisfy by accident (e.g. a sign error
+            // whose fixed point happens to be the sampled coordinate).
+            var regions = new[]
+            {
+                new PoseCropRegion(new Vector2(0.5f, 0.2f), 0.3f),   // near the top
+                new PoseCropRegion(new Vector2(0.5f, 0.5f), 0.4f),   // centered
+                new PoseCropRegion(new Vector2(0.3f, 0.75f), 0.25f), // near the bottom
+                new PoseCropRegion(new Vector2(0.7f, 0.6f), 0.5f),   // large
+            };
+
+            foreach (var region in regions)
+            {
+                var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
+                var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
+
+                foreach (float cropY in new[] { 0f, 0.25f, 0.5f, 0.75f, 1f })
+                {
+                    float backProjected = cropY * uvScale.y + uvOffset.y;
+                    float actuallySampled = SourceYDownForLandmarkerCropY(cropY, blitScale, blitOffset);
+                    Assert.AreEqual(
+                        backProjected,
+                        actuallySampled,
+                        0.0001f,
+                        $"region center={region.Center} size={region.Size}, cropY={cropY}: the y-down source coordinate the two hops physically sampled must match what RunLandmarker's back-projection reports");
+                }
+            }
         }
     }
 }

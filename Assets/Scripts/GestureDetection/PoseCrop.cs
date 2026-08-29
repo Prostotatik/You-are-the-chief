@@ -73,33 +73,60 @@ namespace GestureDetection
 
         // Converts a y-down ToUvTransform() pair into the (scale, offset) that must be
         // passed to Graphics.Blit(Texture, RenderTexture, Vector2 scale, Vector2 offset)
-        // to physically sample the SAME region.
+        // so that, AFTER the whole two-hop pipeline in SentisPoseProvider.RunLandmarker,
+        // the landmarker's y-down crop output back-projects through the ORIGINAL y-down
+        // ToUvTransform pair onto the correct source pixel.
         //
-        // Graphics.Blit samples the source texture in UV space, which is y-UP (v=0 is
-        // the texture's bottom edge, v=1 is its top edge) - the opposite of this
-        // project's y-down convention that ToUvTransform's offset/scale are expressed
-        // in. Feeding a y-down (scale, offset) straight into Blit samples the vertically
-        // mirrored region. This performs the one corrective y-flip needed, keeping the
-        // x axis (which has no convention mismatch) untouched.
+        // The pipeline has TWO hops, and both must be accounted for:
         //
-        // Derivation: a y-down region spans yd in [offset.y, offset.y + scale.y] (top
-        // edge to bottom edge). The corresponding texture-v coordinate for a y-down
-        // value yd is v = 1 - yd (v grows upward, yd grows downward). To have
-        // blit-space t=0 sample the region's physical TOP edge (v = 1 - offset.y) and
-        // blit-space t=1 sample its physical BOTTOM edge (v = 1 - (offset.y +
-        // scale.y)), solve v = t * scale'.y + offset'.y for the two endpoints:
-        //   offset'.y = 1 - offset.y
-        //   scale'.y  = (1 - (offset.y + scale.y)) - (1 - offset.y) = -scale.y
-        // Worked example: region Center=(0.5, 0.2), Size=0.3 (near the top of a y-down
-        // frame) -> ToUvTransform gives offset=(0.35, 0.05), scale=(0.3, 0.3). This
-        // method gives offset'=(0.35, 0.95), scale'=(0.3, -0.3), so blit-space t=0 samples
-        // v=0.95 and t=1 samples v=0.65 - both in the texture's upper half (v close to
-        // 1), i.e. physically the top-ish strip of the source texture, matching y-down
-        // intuition. See PoseCropTests for the algebraic round-trip that pins this.
+        //   _webcamTexture --Graphics.Blit(scale,offset)--> _cropTexture
+        //                  --TextureConverter.ToTensor--> _landmarkerInputTensor
+        //
+        // Hop 2 (ToTensor) already flips. RunLandmarker calls it with
+        // `new TextureTransform().SetTensorLayout(TensorLayout.NHWC)`, which leaves
+        // coordOrigin at its default CoordOrigin.TopLeft (= 0; verified in the Inference
+        // Engine package source, Runtime/Core/Converters/TextureTransform.cs - coordOrigin
+        // is an auto-property never touched by SetTensorLayout). The conversion shader
+        // (Runtime/Core/Resources/Sentis/TextureConversion/TextureToTensor.compute and
+        // .shader, both ~line 45) does:
+        //     if (CoordOrigin == 0) // CoordOrigin.TopLeft
+        //         O_pos.y = O_size.y - 1 - O_pos.y;
+        // i.e. tensor row 0 (the landmarker's cropY = 0) reads the crop texture's
+        // PHYSICAL TOP row. In normalized terms the crop-texture UV sampled for a given
+        // landmarker cropY is v_crop = 1 - cropY.
+        //
+        // Hop 1 (Graphics.Blit) introduces NO flip of its own: it draws a fullscreen quad
+        // whose destination UV t runs bottom-to-top and samples the source at
+        // v_src = t * blitScale.y + blitOffset.y. With scale=1, offset=0 that is an
+        // identity copy (physical top -> physical top).
+        //
+        // Composing, with t = v_crop = 1 - cropY:
+        //     v_src = (1 - cropY) * blitScale.y + blitOffset.y
+        // The back-projection in RunLandmarker computes, in y-down space,
+        //     sourceYDown = cropY * scale.y + offset.y
+        // and y-down relates to source UV by v_src = 1 - sourceYDown. Substituting and
+        // matching coefficients of cropY:
+        //     -blitScale.y = -scale.y                 =>  blitScale.y = scale.y
+        //     blitScale.y + blitOffset.y = 1 - offset.y
+        //                                             =>  blitOffset.y = 1 - offset.y - scale.y
+        //
+        // NOTE the two easy mistakes this formula deliberately avoids: blitScale.y is NOT
+        // negated (the negation would double up on the flip ToTensor already performs),
+        // and blitOffset.y carries the "- scale.y" term (without it, only one end of the
+        // range round-trips).
+        //
+        // The x axis needs no correction - neither hop touches it.
+        //
+        // Worked example: region Center=(0.5, 0.2), Size=0.3 -> ToUvTransform gives
+        // scale=(0.3, 0.3), offset=(0.35, 0.05). This method gives blitScale=(0.3, 0.3),
+        // blitOffset=(0.35, 0.65). Landmarker cropY=0 -> t = 1 -> v_src = 0.3 + 0.65 =
+        // 0.95 -> y-down 0.05 = offset.y. Landmarker cropY=1 -> t = 0 -> v_src = 0.65 ->
+        // y-down 0.35 = offset.y + scale.y. Both ends round-trip. See PoseCropTests for
+        // the test that models both hops independently and pins these numbers.
         public static (Vector2 scale, Vector2 offset) ToBlitTransform(Vector2 scale, Vector2 offset)
         {
-            Vector2 blitScale = new Vector2(scale.x, -scale.y);
-            Vector2 blitOffset = new Vector2(offset.x, 1f - offset.y);
+            Vector2 blitScale = new Vector2(scale.x, scale.y);
+            Vector2 blitOffset = new Vector2(offset.x, 1f - offset.y - scale.y);
             return (blitScale, blitOffset);
         }
     }

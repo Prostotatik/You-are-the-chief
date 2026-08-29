@@ -186,11 +186,17 @@ namespace GestureDetection
                 _framesSinceDetection = 0;
 
                 // Track the "detector forced every frame with no backoff" failure mode:
-                // a region that was lost (not the normal periodic re-detect) and stays
-                // lost/never regains 2 confident joints will hit this branch every
-                // single Update(). The periodic MaxFramesBetweenDetections re-detect
-                // resets this counter below once a landmark-derived region resumes.
-                if (wasRegionLost)
+                // the detector keeps FINDING a person, but the resulting landmarks never
+                // reach 2 confident joints, so the region is lost again every frame and
+                // this branch is hit every single Update(). The counter resets once a
+                // landmark-derived region resumes (below).
+                //
+                // Deliberately requires _currentRegion.HasValue: when RunDetector()
+                // returns null there is simply nobody in frame, which is a normal idle
+                // state, not the failure mode this counter exists to catch. Counting it
+                // would let an empty room eventually fire a misleading warning about
+                // landmark bounds.
+                if (wasRegionLost && _currentRegion.HasValue)
                 {
                     _consecutiveForcedDetections++;
                     if (_consecutiveForcedDetections >= DetectorEveryFrameWarnThreshold && !_hasWarnedDetectorEveryFrame)
@@ -204,7 +210,12 @@ namespace GestureDetection
             if (!_currentRegion.HasValue)
             {
                 // No person found by the detector and no prior region to fall back on -
-                // nothing to feed the landmarker this frame.
+                // nothing to feed the landmarker this frame. An empty frame is not the
+                // failure mode the backoff counter tracks (that's "detector finds a
+                // person but landmarks never resolve"), so clear it rather than letting
+                // an idle stretch accumulate toward a misleading warning.
+                _consecutiveForcedDetections = 0;
+                _hasWarnedDetectorEveryFrame = false;
                 return;
             }
 
@@ -289,11 +300,15 @@ namespace GestureDetection
         {
             var (uvScale, uvOffset) = PoseCrop.ToUvTransform(region);
 
-            // Graphics.Blit samples its source in y-UP UV space, but uvScale/uvOffset
-            // above are in this project's native y-DOWN convention (see PoseLandmark's
-            // doc comment and PoseCrop.ToBlitTransform for the full derivation). Flip
-            // once here, at the Blit call site only - sourcePosition below keeps using
-            // the unflipped y-down uvScale/uvOffset since cropX/cropY are also y-down.
+            // uvScale/uvOffset are in this project's native y-DOWN convention, but the
+            // two hops below (Graphics.Blit into _cropTexture, then
+            // TextureConverter.ToTensor out of it) between them apply exactly one y-flip:
+            // ToTensor's default CoordOrigin.TopLeft makes tensor row 0 read the crop
+            // texture's PHYSICAL top row, while Blit itself is flip-neutral.
+            // ToBlitTransform accounts for BOTH hops so that the y-down back-projection
+            // further below lands on the right source pixel - see its doc comment for the
+            // full derivation. sourcePosition below deliberately keeps using the
+            // unflipped y-down uvScale/uvOffset, since cropX/cropY are y-down too.
             var (blitScale, blitOffset) = PoseCrop.ToBlitTransform(uvScale, uvOffset);
             Graphics.Blit(_webcamTexture, _cropTexture, blitScale, blitOffset);
 
